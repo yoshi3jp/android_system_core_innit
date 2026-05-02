@@ -16,6 +16,11 @@
 
 #include "builtins.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
+
 #include <android/api-level.h>
 #include <dirent.h>
 #include <errno.h>
@@ -100,6 +105,59 @@ using android::fs_mgr::ReadFstabFromFile;
 namespace android {
 namespace init {
 
+#if defined(ANDROID_INIT_INNIT)
+static Result<void> InnitCheckCommand(const std::string& verb,
+                                      const BuiltinArguments& args) {
+    if (!innit::InnitPolicyIsActive()) return {};
+
+    std::vector<std::string> arg_strs;
+    for (size_t i = 1; i < args.size(); ++i) {
+        arg_strs.emplace_back(args[i]);
+    }
+
+    if (!innit::GetInnitPolicy().IsCommandAllowed(verb, arg_strs)) {
+        return Error() << "[Innit] command denied: " << verb
+                       << (arg_strs.empty() ? "" : " " + arg_strs[0]);
+    }
+
+    return {};
+}
+
+static std::string InnitExtractExecPath(const BuiltinArguments& args) {
+    // Android init supports an extended exec form where the real executable
+    // appears after "--":
+    //
+    //   exec <seclabel> <user> <group> [supp_groups...] -- /path/to/bin ...
+    //
+    // Innit must gate the real executable, not merely args[1].
+    for (size_t i = 1; i + 1 < args.size(); ++i) {
+        if (args[i] == "--") {
+            return std::string(args[i + 1]);
+        }
+    }
+
+    if (args.size() > 1) {
+        return std::string(args[1]);
+    }
+
+    return {};
+}
+
+static Result<void> InnitCheckExecPath(const BuiltinArguments& args) {
+    if (!innit::InnitPolicyIsActive()) return {};
+
+    std::string exec_path = InnitExtractExecPath(args);
+    if (exec_path.empty()) return {};
+
+    if (!innit::GetInnitPolicy().IsExecAllowed(exec_path)) {
+        return Error() << "[Innit] exec denied: " << exec_path;
+    }
+
+    return {};
+}
+#endif
+
+
 // There are many legacy paths in rootdir/init.rc that will virtually never exist on a new
 // device, such as '/sys/class/leds/jogball-backlight/brightness'.  As of this writing, there
 // are 81 such failures on cuttlefish.  Instead of spamming the log reporting them, we do not
@@ -159,6 +217,10 @@ static void ForEachServiceInClass(const std::string& classname, F function) {
 }
 
 static Result<void> do_class_start(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("class_start", args); !r.ok()) return r;
+#endif
+
     // Do not start a class if it has a property persist.dont_start_class.CLASS set to 1.
     if (android::base::GetBoolProperty("persist.init.dont_start_class." + args[1], false))
         return {};
@@ -198,11 +260,19 @@ static Result<void> do_class_start_post_data(const BuiltinArguments& args) {
 }
 
 static Result<void> do_class_stop(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("class_stop", args); !r.ok()) return r;
+#endif
+
     ForEachServiceInClass(args[1], &Service::Stop);
     return {};
 }
 
 static Result<void> do_class_reset(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("class_reset", args); !r.ok()) return r;
+#endif
+
     ForEachServiceInClass(args[1], &Service::Reset);
     return {};
 }
@@ -221,6 +291,10 @@ static Result<void> do_class_reset_post_data(const BuiltinArguments& args) {
 }
 
 static Result<void> do_class_restart(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("class_restart", args); !r.ok()) return r;
+#endif
+
     // Do not restart a class if it has a property persist.dont_start_class.CLASS set to 1.
     if (android::base::GetBoolProperty("persist.init.dont_start_class." + args[1], false))
         return {};
@@ -247,6 +321,11 @@ static Result<void> do_enable(const BuiltinArguments& args) {
 }
 
 static Result<void> do_exec(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("exec", args); !r.ok()) return r;
+    if (auto r = InnitCheckExecPath(args); !r.ok()) return r;
+#endif
+
     auto service = Service::MakeTemporaryOneshotService(args.args);
     if (!service.ok()) {
         return Error() << "Could not create exec service: " << service.error();
@@ -273,6 +352,10 @@ static Result<void> do_exec_background(const BuiltinArguments& args) {
 }
 
 static Result<void> do_exec_start(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("exec_start", args); !r.ok()) return r;
+#endif
+
     Service* service = ServiceList::GetInstance().FindService(args[1]);
     if (!service) {
         return Error() << "Service not found";
@@ -793,6 +876,10 @@ static Result<void> do_setrlimit(const BuiltinArguments& args) {
 }
 
 static Result<void> do_start(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("start", args); !r.ok()) return r;
+#endif
+
     Service* svc = ServiceList::GetInstance().FindService(args[1]);
     if (!svc) return Error() << "service " << args[1] << " not found";
     if (auto result = svc->Start(); !result.ok()) {
@@ -802,6 +889,10 @@ static Result<void> do_start(const BuiltinArguments& args) {
 }
 
 static Result<void> do_stop(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("stop", args); !r.ok()) return r;
+#endif
+
     Service* svc = ServiceList::GetInstance().FindService(args[1]);
     if (!svc) return Error() << "service " << args[1] << " not found";
     svc->Stop();
@@ -809,6 +900,10 @@ static Result<void> do_stop(const BuiltinArguments& args) {
 }
 
 static Result<void> do_restart(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("restart", args); !r.ok()) return r;
+#endif
+
     Service* svc = ServiceList::GetInstance().FindService(args[1]);
     if (!svc) return Error() << "service " << args[1] << " not found";
     svc->Restart();
@@ -816,6 +911,10 @@ static Result<void> do_restart(const BuiltinArguments& args) {
 }
 
 static Result<void> do_trigger(const BuiltinArguments& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (auto r = InnitCheckCommand("trigger", args); !r.ok()) return r;
+#endif
+
     ActionManager::GetInstance().QueueEventTrigger(args[1]);
     return {};
 }
