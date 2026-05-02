@@ -84,6 +84,10 @@
 #include "system/core/init/property_service.pb.h"
 #include "util.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
 using namespace std::chrono_literals;
 using namespace std::string_literals;
 
@@ -836,6 +840,37 @@ int SecondStageMain(int argc, char** argv) {
 
     ActionManager& am = ActionManager::GetInstance();
     ServiceList& sm = ServiceList::GetInstance();
+
+#if defined(ANDROID_INIT_INNIT)
+    // Innit policy bootstrap.
+    //
+    // Load /system/etc/init/hw/innit.xml before boot rc parsing.
+    // If the policy is absent, Innit stays inactive and recovery init behaves
+    // like stock Android recovery init. If the policy is present but malformed,
+    // halt instead of continuing in an uncontrolled policy state.
+    {
+        static constexpr char kInnitPolicyPath[] = "/system/etc/init/hw/innit.xml";
+
+        if (access(kInnitPolicyPath, R_OK) == 0) {
+            android::init::innit::InitialiseInnitPolicy(kInnitPolicyPath);
+
+            if (!android::init::innit::InnitPolicyIsActive()) {
+                LOG(FATAL) << "[Innit] Policy file present but failed to load: "
+                           << kInnitPolicyPath
+                           << ". Halting to prevent uncontrolled boot.";
+            }
+
+            if (android::init::innit::GetInnitPolicy().GetSelinuxMode() ==
+                android::init::innit::SelinuxMode::Permissive) {
+                LOG(WARNING) << "[Innit] Forcing SELinux permissive per policy.";
+                security_setenforce(0);
+            }
+        } else {
+            LOG(INFO) << "[Innit] No policy file found at " << kInnitPolicyPath
+                      << "; running as stock recovery init.";
+        }
+    }
+#endif
 
     LoadBootScripts(am, sm);
 
