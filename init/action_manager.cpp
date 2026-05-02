@@ -16,6 +16,11 @@
 
 #include "action_manager.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
+
 #include <android-base/logging.h>
 
 namespace android {
@@ -41,6 +46,13 @@ void ActionManager::AddAction(std::unique_ptr<Action> action) {
 }
 
 void ActionManager::QueueEventTrigger(const std::string& trigger) {
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive() && !innit::GetInnitPolicy().IsEventAllowed(trigger)) {
+        LOG(WARNING) << "[Innit] Rejecting event trigger: " << trigger;
+        return;
+    }
+#endif
+
     auto lock = std::lock_guard{event_queue_lock_};
     event_queue_.emplace(trigger);
 }
