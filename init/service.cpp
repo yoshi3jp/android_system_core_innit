@@ -16,6 +16,11 @@
 
 #include "service.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
+
 #include <fcntl.h>
 #include <inttypes.h>
 #include <linux/securebits.h>
@@ -276,6 +281,61 @@ void Service::Reap(const siginfo_t& siginfo) {
     for (const auto& f : reap_callbacks_) {
         f(siginfo);
     }
+
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive()) {
+        const bool process_failed =
+                siginfo.si_code != CLD_EXITED || siginfo.si_status != EXIT_SUCCESS;
+
+        if (process_failed) {
+            const auto failure_action = innit::GetInnitPolicy().GetFailureAction(name_);
+
+            switch (failure_action) {
+                case innit::FailureAction::Log:
+                    LOG(WARNING) << "[Innit] Service '" << name_
+                                 << "' failed; reboot and critical handling suppressed "
+                                 << "by policy action=log";
+                    innit::GetInnitPolicy().LogInfo(
+                            "service-failure name=" + name_ +
+                            " exit=" + std::to_string(siginfo.si_status) +
+                            " action=log reboot=suppressed");
+                    on_failure_reboot_target_.reset();
+                    flags_ &= ~SVC_CRITICAL;
+                    flags_ |= SVC_DISABLED;
+                    break;
+
+                case innit::FailureAction::Restart:
+                    LOG(WARNING) << "[Innit] Service '" << name_
+                                 << "' failed; reboot and critical handling suppressed "
+                                 << "by policy action=restart";
+                    innit::GetInnitPolicy().LogInfo(
+                            "service-failure name=" + name_ +
+                            " exit=" + std::to_string(siginfo.si_status) +
+                            " action=restart reboot=suppressed");
+                    on_failure_reboot_target_.reset();
+                    flags_ &= ~SVC_CRITICAL;
+                    break;
+
+                case innit::FailureAction::Ignore:
+                    LOG(INFO) << "[Innit] Service '" << name_
+                              << "' failed; ignored by policy";
+                    innit::GetInnitPolicy().LogInfo(
+                            "service-failure name=" + name_ +
+                            " exit=" + std::to_string(siginfo.si_status) +
+                            " action=ignore reboot=suppressed");
+                    on_failure_reboot_target_.reset();
+                    flags_ &= ~SVC_CRITICAL;
+                    flags_ |= SVC_DISABLED;
+                    break;
+
+                case innit::FailureAction::Reboot:
+                    LOG(WARNING) << "[Innit] Service '" << name_
+                                 << "' failed; reboot allowed by policy";
+                    break;
+            }
+        }
+    }
+#endif
 
     if ((siginfo.si_code != CLD_EXITED || siginfo.si_status != 0) && on_failure_reboot_target_) {
         LOG(ERROR) << "Service with 'reboot_on_failure' option failed, shutting down system.";
