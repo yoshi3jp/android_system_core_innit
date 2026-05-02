@@ -1,0 +1,6 @@
+Innit RevA.1 tinyxml2
+Base: AOSP platform/system/core android-12.0.0_r8
+Published tree: history-preserved init/ subtree
+Target: init_second_stage.recovery
+XML parser: dynamic libtinyxml2.so
+Policy: default-deny recovery second-stage init
