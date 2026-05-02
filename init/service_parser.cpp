@@ -16,6 +16,11 @@
 
 #include "service_parser.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
+
 #include <linux/input.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -589,6 +594,18 @@ Result<void> ServiceParser::ParseSection(std::vector<std::string>&& args,
         return Error() << "invalid service name '" << name << "'";
     }
 
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive() && !innit::GetInnitPolicy().IsServiceAllowed(name)) {
+        LOG(WARNING) << "[Innit] Rejecting service definition: " << name
+                     << " from " << filename << ":" << line;
+        innit_service_denied_ = true;
+        service_.reset();
+        return {};
+    }
+#endif
+
+    innit_service_denied_ = false;
+
     filename_ = filename;
 
     Subcontext* restart_action_subcontext = nullptr;
@@ -626,6 +643,15 @@ Result<void> ServiceParser::ParseLineSection(std::vector<std::string>&& args, in
 }
 
 Result<void> ServiceParser::EndSection() {
+#if defined(ANDROID_INIT_INNIT)
+    if (innit_service_denied_) {
+        // Reset denied service state at section boundary.
+        innit_service_denied_ = false;
+        service_.reset();
+        return {};
+    }
+#endif
+
     if (!service_) {
         return {};
     }

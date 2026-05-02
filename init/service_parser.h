@@ -92,6 +92,9 @@ class ServiceParser : public SectionParser {
     std::optional<InterfaceInheritanceHierarchyMap> interface_inheritance_hierarchy_;
     std::unique_ptr<Service> service_;
     std::string filename_;
+#if defined(ANDROID_INIT_INNIT)
+    bool innit_service_denied_ = false;
+#endif
     bool from_apex_ = false;
 };
 
