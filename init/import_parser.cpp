@@ -16,6 +16,11 @@
 
 #include "import_parser.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
+
 #include <android-base/logging.h>
 
 #include "util.h"
@@ -33,6 +38,13 @@ Result<void> ImportParser::ParseSection(std::vector<std::string>&& args,
     if (!conf_file.ok()) {
         return Error() << "Could not expand import: " << conf_file.error();
     }
+
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive() && !innit::GetInnitPolicy().IsRcAllowed(*conf_file)) {
+        LOG(WARNING) << "[Innit] Rejecting rc import: " << *conf_file;
+        return {};
+    }
+#endif
 
     LOG(INFO) << "Added '" << *conf_file << "' to import list";
     if (filename_.empty()) filename_ = filename;
