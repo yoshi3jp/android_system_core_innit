@@ -200,7 +200,11 @@ cc_library_static {
 
     target: {
         recovery: {
-            cflags: ["-DRECOVERY"],
+            cflags: [
+                "-DRECOVERY",
+                "-DANDROID_INIT_INNIT",
+            ],
+            srcs: ["innit/innit_policy.cpp"],
             exclude_static_libs: [
                 "libxml2",
             ],
@@ -240,7 +244,11 @@ cc_binary {
     symlinks: ["ueventd"],
     target: {
         recovery: {
-            cflags: ["-DRECOVERY"],
+            cflags: [
+                "-DRECOVERY",
+                "-DANDROID_INIT_INNIT",
+            ],
+            shared_libs: ["libtinyxml2"],
             exclude_static_libs: [
                 "libxml2",
             ],
@@ -506,4 +514,24 @@ cc_binary {
             enabled: false,
         },
     },
+}
+
+cc_binary_host {
+    name: "innit_policy_check",
+    cflags: [
+        "-DANDROID_INIT_INNIT",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    srcs: [
+        "innit/innit_policy.cpp",
+        "innit/innit_policy_check_main.cpp",
+    ],
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "libtinyxml2",
+    ],
 }
