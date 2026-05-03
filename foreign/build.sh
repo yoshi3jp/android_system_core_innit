@@ -23,25 +23,117 @@ Commands:
   package        stage init + ueventd symlink under out/foreign/arm64/package-root
   clean          remove out/foreign/arm64 and foreign/generated
 
-Required environment for target builds:
+Configuration:
+  foreign/build.sh sources foreign/config/local.env when present.
+
+Important variables emitted by foreign/tools/innit-menuconfig:
+  INNIT_ROOT=/path/to/android_system_core_innit_init_only
+  AOSP_QUARRY=/path/to/sparse/aosp/quarry
+  RECOVERY_SYSTEM=/path/to/dsgsi/staging/root/system
+  RECOVERY_LIB=/path/to/dsgsi/staging/root/system/lib64
+  NDK_ROOT=/path/to/android-ndk
+  NDK_PREBUILT=/path/to/android-ndk/toolchains/llvm/prebuilt/<host-tag>
+  NDK_CC=/path/to/<triple><api>-clang
+  NDK_CXX=/path/to/<triple><api>-clang++
+  ANDROID_API=31
+  TARGET_TRIPLE=aarch64-linux-android
+  OUT_DIR=/path/to/repo/foreign/out/aarch64
+  INIT_OUTPUT=/path/to/repo/foreign/out/aarch64/init.innit
+
+Compatibility aliases still accepted:
   NDK=/path/to/android-ndk
+  API=31
+  TRIPLE=aarch64-linux-android
+  QUARRY_DIR=/path/to/quarry
   DSGSI_ROOTFS=/path/to/dsgsi/staging/root
 
-Important optional environment:
-  API=31                         Android API level for NDK clang driver
-  QUARRY_DIR=$QUARRY_DIR
-  OUT_DIR=$OUT_DIR
-  PROTOC=protoc                   Host protoc executable
-  SEPOLICY_VERSION=30             Foreign replacement for Soong selinux_policy_version
-  INNIT_LIBCAP_A=/path/libcap.a    Use when DSGSI rootfs has no /system/lib64/libcap.so
-  INNIT_ALLOW_GSI_STUB=1          Allow local libgsi fallback if libgsi.so is absent. Default: 1
-  INNIT_ASSUME_GSI_RUNNING=1      Return true from fallback IsGsiRunning(). Default: 1
-  INNIT_EXTRA_INCLUDE_DIRS="a:b"  Extra target include dirs
-  INNIT_EXTRA_LIB_DIRS="a:b"      Extra target library dirs
-  INNIT_EXTRA_LDLIBS="-lfoo ..."  Extra linker flags
+Optional:
+  LOCAL_ENV=/path/to/local.env          Override local.env path
+  PROTOC=protoc                         Host protoc executable
+  SEPOLICY_VERSION=30                   Foreign replacement for Soong selinux_policy_version
+  INNIT_LIBCAP_A=/path/libcap.a         Use when RECOVERY_LIB has no libcap.so
+  INNIT_ALLOW_GSI_STUB=1                Allow local libgsi fallback if libgsi.so is absent. Default: 1
+  INNIT_ASSUME_GSI_RUNNING=1            Return true from fallback IsGsiRunning(). Default: 1
+  INNIT_EXTRA_INCLUDE_DIRS="a:b"       Extra target include dirs
+  INNIT_EXTRA_LIB_DIRS="a:b"           Extra target library dirs
+  INNIT_EXTRA_LDLIBS="-lfoo ..."       Extra linker flags
 
 EOF_USAGE
 }
+
+
+LOCAL_ENV="${LOCAL_ENV:-$REPO_ROOT/foreign/config/local.env}"
+
+load_local_env() {
+  [[ -f "$LOCAL_ENV" ]] || return 0
+  # shellcheck disable=SC1090
+  source "$LOCAL_ENV"
+}
+
+normalize_menuconfig_env() {
+  if [[ -n "${INNIT_ROOT:-}" ]]; then
+    local configured_root
+    configured_root="$(abs_path "$INNIT_ROOT")"
+    if [[ "$configured_root" != "$REPO_ROOT" ]]; then
+      warn "local.env INNIT_ROOT differs from script repo root"
+      warn "  INNIT_ROOT=$configured_root"
+      warn "  script root=$REPO_ROOT"
+      warn "using script root; run innit-menuconfig from this checkout if this is wrong"
+    fi
+  fi
+
+  if [[ -n "${AOSP_QUARRY:-}" ]]; then
+    QUARRY_DIR="$(abs_path "$AOSP_QUARRY")"
+  fi
+
+  if [[ -n "${NDK_ROOT:-}" ]]; then
+    NDK="$NDK_ROOT"
+  fi
+
+  if [[ -n "${ANDROID_API:-}" ]]; then
+    API="$ANDROID_API"
+  fi
+
+  if [[ -n "${TARGET_TRIPLE:-}" ]]; then
+    TRIPLE="$TARGET_TRIPLE"
+  fi
+
+  if [[ -n "${OUT_DIR:-}" ]]; then
+    OUT_DIR="$(abs_path "$OUT_DIR")"
+  fi
+
+  if [[ -z "${INIT_OUTPUT:-}" ]]; then
+    INIT_OUTPUT="$OUT_DIR/init.innit"
+  else
+    INIT_OUTPUT="$(abs_path "$INIT_OUTPUT")"
+  fi
+
+  if [[ -n "${RECOVERY_SYSTEM:-}" ]]; then
+    RECOVERY_SYSTEM="$(abs_path "$RECOVERY_SYSTEM")"
+  fi
+
+  if [[ -n "${RECOVERY_LIB:-}" ]]; then
+    RECOVERY_LIB="$(abs_path "$RECOVERY_LIB")"
+  fi
+
+  if [[ -z "${RECOVERY_LIB:-}" && -n "${RECOVERY_SYSTEM:-}" ]]; then
+    RECOVERY_LIB="$RECOVERY_SYSTEM/${RECOVERY_LIBDIR:-lib64}"
+  fi
+
+  if [[ -z "${DSGSI_ROOTFS:-}" && -n "${RECOVERY_SYSTEM:-}" && "$(basename "$RECOVERY_SYSTEM")" == "system" ]]; then
+    local maybe_root
+    maybe_root="$(dirname "$RECOVERY_SYSTEM")"
+    if [[ -d "$maybe_root/system/${RECOVERY_LIBDIR:-lib64}" ]]; then
+      DSGSI_ROOTFS="$maybe_root"
+    fi
+  fi
+
+  export NDK API TRIPLE QUARRY_DIR OUT_DIR INIT_OUTPUT
+  export RECOVERY_SYSTEM RECOVERY_LIB DSGSI_ROOTFS
+}
+
+load_local_env
+normalize_menuconfig_env
 
 API="${API:-31}"
 TRIPLE="${TRIPLE:-aarch64-linux-android}"
@@ -56,7 +148,7 @@ GEN_DIR="$REPO_ROOT/foreign/generated"
 PROTO_SRC_DIR="$GEN_DIR/proto_src"
 PROTO_OUT_DIR="$GEN_DIR/proto_out"
 FALLBACK_INCLUDE_DIR="$GEN_DIR/fallback_include"
-STAGING_SYSTEM_DIR="$OUT_DIR/system"
+POLICY_CHECK_OUTPUT="$OUT_DIR/innit-policy-check"
 
 TC=""
 CC=""
@@ -74,22 +166,46 @@ ensure_quarry() {
 }
 
 setup_tools() {
-  : "${NDK:?set NDK to the Android NDK path}"
-  TC="$(find_ndk_toolchain)"
-  CC="$TC/bin/${TRIPLE}${API}-clang"
-  CXX="$TC/bin/${TRIPLE}${API}-clang++"
-  AR="$TC/bin/llvm-ar"
-  READELF_TOOL="$TC/bin/llvm-readelf"
-  NM_TOOL="$TC/bin/llvm-nm"
+  if [[ -n "${NDK_PREBUILT:-}" ]]; then
+    TC="$NDK_PREBUILT"
+  elif [[ -n "${NDK_ROOT:-}" || -n "${NDK:-}" ]]; then
+    : "${NDK:?set NDK_ROOT in local.env or set NDK to the Android NDK path}"
+    TC="$(find_ndk_toolchain)"
+  else
+    die "set NDK_ROOT in foreign/config/local.env or export NDK=/path/to/android-ndk"
+  fi
+
+  CC="${NDK_CC:-$TC/bin/${TRIPLE}${API}-clang}"
+  CXX="${NDK_CXX:-$TC/bin/${TRIPLE}${API}-clang++}"
+  AR="${NDK_AR:-$TC/bin/llvm-ar}"
+  READELF_TOOL="${READELF:-$TC/bin/llvm-readelf}"
+  NM_TOOL="${NM:-$TC/bin/llvm-nm}"
 
   [[ -x "$CC" ]] || die "missing target C compiler: $CC"
   [[ -x "$CXX" ]] || die "missing target C++ compiler: $CXX"
   [[ -x "$AR" ]] || die "missing llvm-ar: $AR"
+  [[ -x "$READELF_TOOL" ]] || die "missing llvm-readelf: $READELF_TOOL"
+  [[ -x "$NM_TOOL" ]] || die "missing llvm-nm: $NM_TOOL"
 }
 
 setup_abi() {
-  DSGSI_ABI_ROOT="$(require_dsgsi_rootfs)"
-  ABI_LIB64="$DSGSI_ABI_ROOT/system/lib64"
+  if [[ -n "${RECOVERY_LIB:-}" ]]; then
+    ABI_LIB64="$RECOVERY_LIB"
+    DSGSI_ABI_ROOT="${RECOVERY_SYSTEM:-$(dirname "$ABI_LIB64")}"
+  elif [[ -n "${RECOVERY_SYSTEM:-}" ]]; then
+    DSGSI_ABI_ROOT="$RECOVERY_SYSTEM"
+    ABI_LIB64="$RECOVERY_SYSTEM/${RECOVERY_LIBDIR:-lib64}"
+  else
+    DSGSI_ABI_ROOT="$(require_dsgsi_rootfs)"
+    ABI_LIB64="$DSGSI_ABI_ROOT/system/${RECOVERY_LIBDIR:-lib64}"
+  fi
+
+  [[ -d "$ABI_LIB64" ]] || die "recovery ABI library directory is missing: $ABI_LIB64"
+
+  if [[ -n "${RECOVERY_SYSTEM:-}" && ! -e "$RECOVERY_SYSTEM/bin/linker64" ]]; then
+    warn "recovery system linker not found at $RECOVERY_SYSTEM/bin/linker64"
+    warn "link will still use runtime interpreter /system/bin/linker64"
+  fi
 }
 
 write_compat_headers() {
@@ -378,6 +494,12 @@ build_common_cflags() {
     "${COMMON_CFLAGS[@]}"
     -std=gnu11
   )
+
+  if [[ -n "${CXXFLAGS_EXTRA:-}" ]]; then
+    # shellcheck disable=SC2206
+    local extra_cxx=( $CXXFLAGS_EXTRA )
+    CXXFLAGS+=("${extra_cxx[@]}")
+  fi
 }
 
 sanitize_obj_name() {
@@ -506,17 +628,25 @@ init_sources() {
 
   # tinyxml2 may not exist in a recovery-derived /system/lib64. Compile it in
   # statically when absent.
-  if [[ ! -e "$ABI_LIB64/libtinyxml2.so" ]]; then
-    warn "libtinyxml2.so absent in DSGSI_ROOTFS; compiling tinyxml2.cpp into init"
-    add_src INIT_SOURCES "$QUARRY_DIR/external/tinyxml2/tinyxml2.cpp"
-  fi
+  case "${ENABLE_TINYXML2_DYNAMIC:-yes}" in
+    yes)
+      [[ -e "$ABI_LIB64/libtinyxml2.so" ]] || die "ENABLE_TINYXML2_DYNAMIC=yes but $ABI_LIB64/libtinyxml2.so is absent"
+      ;;
+    no)
+      warn "ENABLE_TINYXML2_DYNAMIC=no; compiling tinyxml2.cpp into init"
+      add_src INIT_SOURCES "$QUARRY_DIR/external/tinyxml2/tinyxml2.cpp"
+      ;;
+    *)
+      die "invalid ENABLE_TINYXML2_DYNAMIC=${ENABLE_TINYXML2_DYNAMIC}; expected yes or no"
+      ;;
+  esac
 }
 
 policy_sources() {
   POLICY_SOURCES=()
   add_src POLICY_SOURCES "$INIT_DIR/innit/innit_policy.cpp"
   add_src POLICY_SOURCES "$INIT_DIR/innit/innit_policy_check_main.cpp"
-  if [[ ! -e "$ABI_LIB64/libtinyxml2.so" ]]; then
+  if [[ "${ENABLE_TINYXML2_DYNAMIC:-yes}" == "no" ]]; then
     add_src POLICY_SOURCES "$QUARRY_DIR/external/tinyxml2/tinyxml2.cpp"
   fi
 }
@@ -574,7 +704,9 @@ build_ldflags() {
   add_lib_flag_if_present keyutils 1
   add_lib_flag_if_present protobuf-cpp-lite 1
 
-  add_lib_flag_if_present tinyxml2 0
+  if [[ "${ENABLE_TINYXML2_DYNAMIC:-yes}" == "yes" ]]; then
+    add_lib_flag_if_present tinyxml2 1
+  fi
   add_lib_flag_if_present backtrace 0
   add_lib_flag_if_present gsi 0
   add_lib_flag_if_present modprobe 0
@@ -597,6 +729,12 @@ build_ldflags() {
     -lm
     -lc
   )
+
+  if [[ -n "${LDFLAGS_EXTRA:-}" ]]; then
+    # shellcheck disable=SC2206
+    local extra_ldflags=( $LDFLAGS_EXTRA )
+    LDFLAGS+=("${extra_ldflags[@]}")
+  fi
 
   if [[ -n "${INNIT_EXTRA_LDLIBS:-}" ]]; then
     # shellcheck disable=SC2206
@@ -649,8 +787,8 @@ build_policy_check() {
   build_ldflags
   policy_sources
   compile_objects POLICY_SOURCES
-  link_binary "$STAGING_SYSTEM_DIR/bin/innit-policy-check"
-  log "built $STAGING_SYSTEM_DIR/bin/innit-policy-check"
+  link_binary "$POLICY_CHECK_OUTPUT"
+  log "built $POLICY_CHECK_OUTPUT"
 }
 
 build_init() {
@@ -665,9 +803,8 @@ build_init() {
   build_ldflags
   init_sources
   compile_objects INIT_SOURCES
-  link_binary "$STAGING_SYSTEM_DIR/bin/init"
-  ln -sfn init "$STAGING_SYSTEM_DIR/bin/ueventd"
-  log "built $STAGING_SYSTEM_DIR/bin/init"
+  link_binary "$INIT_OUTPUT"
+  log "built $INIT_OUTPUT"
 }
 
 clean() {
@@ -676,20 +813,38 @@ clean() {
   log "removed $OUT_DIR and $GEN_DIR"
 }
 
-cmd="${1:-all}"
+run_check_abi() {
+  local binary="${1:-$INIT_OUTPUT}"
+
+  if [[ -n "${DSGSI_ROOTFS:-}" ]]; then
+    DSGSI_ROOTFS="$(abs_path "$DSGSI_ROOTFS")"
+    export DSGSI_ROOTFS
+    "$SCRIPT_DIR/check-abi.sh" --binary "$binary"
+    return 0
+  fi
+
+  warn "skipping foreign/check-abi.sh because no DSGSI_ROOTFS root was provided"
+  warn "local.env RECOVERY_SYSTEM/RECOVERY_LIB is sufficient for linking, but check-abi.sh still validates a full staging root"
+}
+
+run_package() {
+  "$SCRIPT_DIR/package.sh" --binary "${1:-$INIT_OUTPUT}"
+}
+
+cmd="${1:-${BUILD_VARIANT:-all}}"
 case "$cmd" in
-  all)
+  all|both)
     build_policy_check
     build_init
-    "$SCRIPT_DIR/check-abi.sh" --binary "$STAGING_SYSTEM_DIR/bin/init"
-    "$SCRIPT_DIR/package.sh" --binary "$STAGING_SYSTEM_DIR/bin/init"
+    run_check_abi "$INIT_OUTPUT"
+    run_package "$INIT_OUTPUT"
     ;;
+  second_stage|init) build_init ;;
+  policy_check|policy-check) build_policy_check ;;
   prepare) prepare ;;
   proto) prepare; generate_proto ;;
-  policy-check) build_policy_check ;;
-  init) build_init ;;
-  check-abi) "$SCRIPT_DIR/check-abi.sh" --binary "$STAGING_SYSTEM_DIR/bin/init" ;;
-  package) "$SCRIPT_DIR/package.sh" --binary "$STAGING_SYSTEM_DIR/bin/init" ;;
+  check-abi) run_check_abi "$INIT_OUTPUT" ;;
+  package) run_package "$INIT_OUTPUT" ;;
   clean) clean ;;
   -h|--help|help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
