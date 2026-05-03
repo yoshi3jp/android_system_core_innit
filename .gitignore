@@ -1,0 +1,12 @@
+# Innit foreign-build quarry; reproducible, not source of truth.
+/quarry/
+
+# Innit foreign build outputs.
+/out/
+
+# Locally generated proto/shim material.
+/foreign/generated/
+
+# Machine-local build configuration.
+/foreign/config/local.env
+/foreign/config/abi-root.env
