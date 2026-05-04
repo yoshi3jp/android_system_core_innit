@@ -10,3 +10,6 @@
 # Machine-local build configuration.
 /foreign/config/local.env
 /foreign/config/abi-root.env
+
+# Host helper tools built or dropped locally for the foreign build
+/foreign/host-tools/
