@@ -16,6 +16,10 @@
 
 #include "parser.h"
 
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
+
 #include <dirent.h>
 
 #include <android-base/chrono_utils.h>
@@ -140,6 +144,13 @@ bool Parser::ParseConfigFileInsecure(const std::string& path) {
 }
 
 bool Parser::ParseConfigFile(const std::string& path) {
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive() && !innit::GetInnitPolicy().IsRcAllowed(path)) {
+        LOG(WARNING) << "[Innit] Rejecting rc file: " << path;
+        return true;  // Policy denial is intentional; do not schedule late_import.
+    }
+#endif
+
     LOG(INFO) << "Parsing file " << path << "...";
     android::base::Timer t;
     auto config_contents = ReadFile(path);
@@ -155,6 +166,13 @@ bool Parser::ParseConfigFile(const std::string& path) {
 }
 
 bool Parser::ParseConfigDir(const std::string& path) {
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive() && !innit::GetInnitPolicy().IsRcAllowed(path)) {
+        LOG(WARNING) << "[Innit] Rejecting rc directory: " << path;
+        return true;  // Policy denial is intentional; do not schedule late_import.
+    }
+#endif
+
     LOG(INFO) << "Parsing directory " << path << "...";
     std::unique_ptr<DIR, decltype(&closedir)> config_dir(opendir(path.c_str()), closedir);
     if (!config_dir) {

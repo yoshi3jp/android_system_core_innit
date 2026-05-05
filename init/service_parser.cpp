@@ -355,6 +355,17 @@ Result<void> ServiceParser::ParseProcessRlimit(std::vector<std::string>&& args) 
 }
 
 Result<void> ServiceParser::ParseRebootOnFailure(std::vector<std::string>&& args) {
+#if defined(ANDROID_INIT_INNIT)
+    if (innit::InnitPolicyIsActive() &&
+        innit::GetInnitPolicy().GetFailureAction(service_->name()) != innit::FailureAction::Reboot) {
+        LOG(WARNING) << "[Innit] Ignoring reboot_on_failure for service '" << service_->name()
+                     << "' target='" << args[1] << "'";
+        innit::GetInnitPolicy().LogInfo("ignore reboot_on_failure service=" + service_->name() +
+                                        " target=" + args[1]);
+        return {};
+    }
+#endif
+
     if (service_->on_failure_reboot_target_) {
         return Error() << "Only one reboot_on_failure command may be specified";
     }

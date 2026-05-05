@@ -237,6 +237,14 @@ void InnitPolicy::AddDeniedCommandArg(std::string verb, std::string arg) {
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
+static void Kmsg(const std::string& message) {
+    int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    std::string line = "innit: " + message + "\n";
+    write(fd, line.data(), line.size());
+    close(fd);
+}
+
 static std::string Timestamp() {
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
@@ -253,6 +261,7 @@ void InnitPolicy::AppendToLog(const std::string& log_path,
     write(fd, line.data(), line.size());
     close(fd);
 
+    Kmsg(message);
     LOG(INFO) << "[Innit] " << message;
 }
 
@@ -461,7 +470,7 @@ void InitialiseInnitPolicy(const std::string& policy_path) {
         return;
     }
     g_policy = std::move(*result);
-    g_policy->LogInfo("Innit policy loaded. mode=" + g_policy->GetMode());
+    g_policy->LogInfo("policy loaded mode=" + g_policy->GetMode());
     LOG(INFO) << "[Innit] Policy active. mode=" << g_policy->GetMode();
 }
 

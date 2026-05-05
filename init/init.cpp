@@ -278,6 +278,16 @@ void DebugRebootLogging() {
     }
 }
 
+#if defined(ANDROID_INIT_INNIT)
+static void InnitKmsg(const std::string& message) {
+    int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    std::string line = "innit: " + message + "\n";
+    write(fd, line.data(), line.size());
+    close(fd);
+}
+#endif
+
 void DumpState() {
     ServiceList::GetInstance().DumpState();
     ActionManager::GetInstance().DumpState();
@@ -852,6 +862,7 @@ int SecondStageMain(int argc, char** argv) {
         static constexpr char kInnitPolicyPath[] = "/system/etc/init/hw/innit.xml";
 
         if (access(kInnitPolicyPath, R_OK) == 0) {
+            InnitKmsg(std::string("policy file found ") + kInnitPolicyPath);
             android::init::innit::InitialiseInnitPolicy(kInnitPolicyPath);
 
             if (!android::init::innit::InnitPolicyIsActive()) {
@@ -866,6 +877,7 @@ int SecondStageMain(int argc, char** argv) {
                 security_setenforce(0);
             }
         } else {
+            InnitKmsg(std::string("policy file missing ") + kInnitPolicyPath);
             LOG(INFO) << "[Innit] No policy file found at " << kInnitPolicyPath
                       << "; running as stock recovery init.";
         }
