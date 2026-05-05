@@ -64,6 +64,9 @@
 #include "first_stage_init.h"
 #include "first_stage_mount.h"
 #include "import_parser.h"
+#if defined(ANDROID_INIT_INNIT)
+#include "innit/innit_policy.h"
+#endif
 #include "keychords.h"
 #include "lmkd_service.h"
 #include "mount_handler.h"
@@ -318,6 +321,16 @@ static void LoadBootScripts(ActionManager& action_manager, ServiceList& service_
     Parser parser = CreateParser(action_manager, service_list);
 
     std::string bootscript = GetProperty("ro.boot.init_rc", "");
+
+#if defined(ANDROID_INIT_INNIT)
+    const std::string original_bootscript = bootscript;
+    LOG(ERROR) << "[Innit] LoadBootScripts original ro.boot.init_rc='"
+               << original_bootscript << "'";
+    bootscript = "/system/etc/init/hw/init.rc";
+    LOG(ERROR) << "[Innit] LoadBootScripts forced bootscript='"
+               << bootscript << "'";
+#endif
+
     if (bootscript.empty()) {
         parser.ParseConfig("/system/etc/init/hw/init.rc");
         if (!parser.ParseConfig("/system/etc/init")) {
